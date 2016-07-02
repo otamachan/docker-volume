@@ -138,9 +138,15 @@ class ServerHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         self.log_message('Backup started')
-        self.server.volume.backup()
-        self.wfile.write("BACKUP DONE\n")
-        self.send_response(200)
+        try:
+            self.server.volume.backup()
+            self.wfile.write("BACKUP DONE\n")
+            self.send_response(200)
+        except Exception as err:
+            import traceback
+            self.wfile.write(traceback.format_exc())
+            self.send_response(500)
+            raise
 
 
 class Server(SocketServer.TCPServer):

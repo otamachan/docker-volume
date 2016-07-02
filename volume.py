@@ -19,11 +19,11 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-def exclude_filter(tinfo, exclude_list):
+def should_exclude(filename, exclude_list):
     for exclude in exclude_list:
-        if re.search(exclude, tinfo.name):
-            return None
-    return tinfo
+        if re.search(exclude, filename):
+            return True
+    return False
 
 
 def get_args():
@@ -70,8 +70,17 @@ class Volume(object):
                                     os.path.basename(backup_file))
             try:
                 tar = tarfile.open(tar_file, 'w:gz')
-                tar.add(path, arcname='',
-                        filter=lambda x: exclude_filter(x, exclude_list))
+                for root, dirs, files in os.walk(path):
+                    f_root = root[len(path):]
+                    for f in files + dirs:
+                        if not should_exclude(os.path.join(f_root, f),
+                                              exclude_list):
+                            try:
+                                tar.add(os.path.join(root, f),
+                                        arcname=os.path.join(f_root, f),
+                                        recursive=False)
+                            except IOError:
+                                pass
                 tar.close()
                 if parts.scheme == 's3':
                     s3_params = backup.get('s3', {})

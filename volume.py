@@ -65,11 +65,11 @@ class Volume(object):
             if parts.scheme not in ('s3', ):
                 raise RuntimeError("Not supported scheme: {0}".format(dest))
             backup_file = parts.path + suffix
-            self.logger.info("Start backup: %s to %s", path, dest)
+            self.logger.info("Start backup: %s", path)
             tar_file = os.path.join(self.tmp_dir,
                                     os.path.basename(backup_file))
+            tar = tarfile.open(tar_file, 'w:gz')
             try:
-                tar = tarfile.open(tar_file, 'w:gz')
                 for root, dirs, files in os.walk(path):
                     f_root = root[len(path):]
                     for f in files + dirs:
@@ -92,6 +92,7 @@ class Volume(object):
             finally:
                 if os.path.exists(tar_file):
                     os.remove(tar_file)
+            self.logger.info("Done backup: %s", path)
 
     def restore(self):
         for backup in self.config['backups']:
@@ -136,6 +137,7 @@ class Volume(object):
                         os.remove(tar_file)
 
     def signal(self, sig, stack):
+        self.logger.info("Recieved signal: %d", sig)
         self.backup()
         raise SystemExit('Exiting')
 
@@ -146,7 +148,7 @@ class ServerHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
         self.send_response(200)
 
     def do_POST(self):
-        self.log_message('Backup started')
+        self.log_message('POST recieved')
         try:
             self.server.volume.backup()
             self.wfile.write("BACKUP DONE\n")

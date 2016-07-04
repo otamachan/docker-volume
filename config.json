@@ -1,0 +1,15 @@
+{"tmp": "/tmp",
+ "backups": [
+   {"path": "/tmp/test",
+    "chmod": "0777",
+    "chown": "1000:1000",
+    "exclude": [
+      "\\.log$"
+    ],
+    "dest": "s3://ecs-backup-test/backups/_test",
+    "s3": {
+      "StorageClass": "REDUCED_REDUNDANCY"
+    }
+   }
+ ]
+}

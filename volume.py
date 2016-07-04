@@ -5,6 +5,7 @@ import argparse
 import boto3
 import datetime
 import glob
+import json
 import logging
 import os
 import re
@@ -16,7 +17,6 @@ import subprocess
 import sys
 import tarfile
 import urlparse
-import yaml
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -50,7 +50,7 @@ class Volume(object):
             config = response['Body'].read()
         else:
             raise RuntimeError("Not supported scheme: {0}".format(config_path))
-        self.config = yaml.load(config)
+        self.config = json.loads(config)
         self.tmp_dir = self.config.get('tmp', '/tmp')
         signal.signal(signal.SIGINT, self.signal)
         signal.signal(signal.SIGTERM, self.signal)

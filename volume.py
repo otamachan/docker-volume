@@ -4,9 +4,11 @@
 import argparse
 import boto3
 import datetime
+import glob
 import logging
 import os
 import re
+import shutil
 import signal
 import SimpleHTTPServer
 import SocketServer
@@ -62,7 +64,7 @@ class Volume(object):
             exclude_list = backup.get('exclude', [])
             dest = backup['dest']
             parts = urlparse.urlparse(dest)
-            if parts.scheme not in ('s3', ):
+            if parts.scheme not in ('s3', 'file'):
                 raise RuntimeError("Not supported scheme: {0}".format(dest))
             backup_file = parts.path + suffix
             self.logger.info("Start backup: %s", path)
@@ -89,6 +91,17 @@ class Volume(object):
                                      tar_file, parts.netloc, backup_file[1:])
                     client.upload_file(tar_file, parts.netloc, backup_file[1:],
                                        ExtraArgs=s3_params)
+                elif parts.scheme == 'file':
+                    dest_path = os.path.join(parts.netloc, backup_file)
+                    self.logger.info("Copying %s to %s",
+                                     tar_file, dest_path)
+                    try:
+                        dirname = os.path.dirname(dest_path)
+                        if not os.path.exists(dirname):
+                            os.makedirs(dirname)
+                        shutil.copyfile(tar_file, dest_path)
+                    except IOError as err:
+                        self.logger.error("Failed to copy: {0}".format(str(err)))
             finally:
                 if os.path.exists(tar_file):
                     os.remove(tar_file)
@@ -123,11 +136,21 @@ class Volume(object):
                             tar_file = os.path.join(self.tmp_dir,
                                                     os.path.basename(key))
                             client.download_file(parts.netloc, key, tar_file)
+                elif parts.scheme == 'file':
+                    src_file = os.path.join(parts.netloc, parts.path)
+                    files = sorted(glob.glob(src_file + '*'))
+                    if files:
+                        filename = files[-1]
+                        try:
+                            tar_file = os.path.join(self.tmp_dir, os.path.basename(filename))
+                            shutil.copyfile(filename, tar_file)
+                        except IOError as err:
+                            self.logger.error("Failed to copy: {0}".format(str(err)))
                 else:
                     raise RuntimeError("Not supported scheme: {0}".
                                        format(dest))
                 if tar_file is not None:
-                    self.logger.info("Restoring from {0}".format(key))
+                    self.logger.info("Restoring from {0}".format(tar_file))
                     tar = tarfile.open(tar_file, 'r:gz')
                     tar.extractall(backup['path'])
                     tar.close()

@@ -30,8 +30,9 @@ def should_exclude(filename, exclude_list):
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', default=8000, type=int)
     parser.add_argument('--config', required=True)
+    parser.add_argument('--port', default=8000, type=int)
+    parser.add_argument('--no-restore', action='store_true')
     return parser.parse_args()
 
 
@@ -188,7 +189,8 @@ class Server(SocketServer.TCPServer):
 
 args = get_args()
 volume = Volume(args.config)
-volume.restore()
+if not args.no_restore:
+    volume.restore()
 
 Handler = ServerHandler
 httpd = Server(("", args.port), Handler)

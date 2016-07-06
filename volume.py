@@ -74,13 +74,16 @@ class Volume(object):
             tar = tarfile.open(tar_file, 'w:gz')
             try:
                 for root, dirs, files in os.walk(path):
-                    f_root = root[len(path):]
                     for f in files + dirs:
-                        if not should_exclude(os.path.join(f_root, f),
+                        if root == path:
+                            arcname = f
+                        else:
+                            arcname = os.path.join(root[len(path)+1:], f)
+                        if not should_exclude(arcname,
                                               exclude_list):
                             try:
                                 tar.add(os.path.join(root, f),
-                                        arcname=os.path.join(f_root, f),
+                                        arcname=arcname,
                                         recursive=False)
                             except IOError:
                                 pass

@@ -33,6 +33,7 @@ def get_args():
     parser.add_argument('--config', required=True)
     parser.add_argument('--port', default=8000, type=int)
     parser.add_argument('--no-restore', action='store_true')
+    parser.add_argument('--no-backup', action='store_true')
     return parser.parse_args()
 
 
@@ -165,7 +166,6 @@ class Volume(object):
 
     def signal(self, sig, stack):
         self.logger.info("Recieved signal: %d", sig)
-        self.backup()
         raise SystemExit('Exiting')
 
 
@@ -203,4 +203,6 @@ logger.info("Server started port:%d", args.port)
 try:
     httpd.serve_forever()
 finally:
+    if not args.no_backup:
+        self.backup()
     logger.info("Finished")

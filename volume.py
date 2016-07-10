@@ -204,5 +204,5 @@ try:
     httpd.serve_forever()
 finally:
     if not args.no_backup:
-        self.backup()
+        volume.backup()
     logger.info("Finished")

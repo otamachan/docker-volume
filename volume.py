@@ -71,6 +71,7 @@ class Volume(object):
             path = backup['path']
             exclude_list = backup.get('exclude', [])
             dest = backup['dest']
+            compresslevel = backup.get('compresslevel', 9)
             parts = urlparse.urlparse(dest)
             if parts.scheme not in ('s3', 'file'):
                 raise RuntimeError("Not supported scheme: {0}".format(dest))
@@ -78,7 +79,7 @@ class Volume(object):
             self.logger.info("Start backup: %s", path)
             tar_file = os.path.join(config['tmp'],
                                     os.path.basename(backup_file))
-            tar = tarfile.open(tar_file, 'w:gz')
+            tar = tarfile.TarFile.gzopen(tar_file, mode='w', compresslevel=compresslevel)
             try:
                 for root, dirs, files in os.walk(path):
                     for f in files + dirs:

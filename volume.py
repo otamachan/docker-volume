@@ -40,26 +40,32 @@ def get_args():
 class Volume(object):
     def __init__(self, config_path):
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.config_path = config_path
+        signal.signal(signal.SIGINT, self.signal)
+        signal.signal(signal.SIGTERM, self.signal)
+
+    def read_config(self, config_path):
         parts = urlparse.urlparse(config_path)
         if parts.scheme in ('http', 'https', 'ftp', 'file'):
             import urllib2
             response = urllib2.urlopen(config_path)
-            config = response.read()
+            config_content = response.read()
         elif parts.scheme == 's3':
             client = boto3.client('s3')
             response = client.get_object(Bucket=parts.netloc,
                                          Key=parts.path[1:])
-            config = response['Body'].read()
+            config_content = response['Body'].read()
         else:
             raise RuntimeError("Not supported scheme: {0}".format(config_path))
-        self.config = json.loads(config)
-        self.tmp_dir = self.config.get('tmp', '/tmp')
-        signal.signal(signal.SIGINT, self.signal)
-        signal.signal(signal.SIGTERM, self.signal)
+        config = json.loads(config_content)
+        if not 'tmp' in config:
+            config['tmp'] = '/tmp'
+        return config
 
     def backup(self):
+        config = self.read_config(self.config_path)
         suffix = datetime.datetime.now().strftime("-%Y%m%d-%H%M%S") + '.tar.gz'
-        for backup in self.config['backups']:
+        for backup in config['backups']:
             if 'path' not in backup:
                 continue
             path = backup['path']
@@ -70,7 +76,7 @@ class Volume(object):
                 raise RuntimeError("Not supported scheme: {0}".format(dest))
             backup_file = parts.path + suffix
             self.logger.info("Start backup: %s", path)
-            tar_file = os.path.join(self.tmp_dir,
+            tar_file = os.path.join(config['tmp'],
                                     os.path.basename(backup_file))
             tar = tarfile.open(tar_file, 'w:gz')
             try:
@@ -113,7 +119,8 @@ class Volume(object):
             self.logger.info("Done backup: %s", path)
 
     def restore(self):
-        for backup in self.config['backups']:
+        config = self.read_config(self.config_path)
+        for backup in config['backups']:
             if 'path' not in backup:
                 continue
             path = backup['path']
@@ -138,7 +145,7 @@ class Volume(object):
                         keys = sorted([c['Key'] for c in objects['Contents']])
                         if keys:
                             key = keys[-1]
-                            tar_file = os.path.join(self.tmp_dir,
+                            tar_file = os.path.join(config['tmp'],
                                                     os.path.basename(key))
                             client.download_file(parts.netloc, key, tar_file)
                 elif parts.scheme == 'file':
@@ -147,7 +154,7 @@ class Volume(object):
                     if files:
                         filename = files[-1]
                         try:
-                            tar_file = os.path.join(self.tmp_dir, os.path.basename(filename))
+                            tar_file = os.path.join(config['tmp'], os.path.basename(filename))
                             shutil.copyfile(filename, tar_file)
                         except IOError as err:
                             self.logger.error("Failed to copy: {0}".format(str(err)))

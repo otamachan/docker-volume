@@ -17,6 +17,13 @@ import subprocess
 import sys
 import tarfile
 import urlparse
+
+import s3
+
+UPLOAD_PART_SIZE = 50 * 1024**2
+DOWNLOAD_PART_SIZE = 50 * 1024**2
+
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -28,149 +35,126 @@ def should_exclude(filename, exclude_list):
     return False
 
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config', required=True)
-    parser.add_argument('--port', default=8000, type=int)
-    parser.add_argument('--no-restore', action='store_true')
-    parser.add_argument('--no-backup', action='store_true')
-    return parser.parse_args()
+class Config(object):
+    def __init__(self, argv):
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--port', default=8000, type=int)
+        parser.add_argument('--path', required=True, type=str)
+        parser.add_argument('--dest', required=True, type=str)
+        parser.add_argument('--mode', default=None, type=str)
+        parser.add_argument('--owner', default=None, type=str)
+        parser.add_argument('--compresslevel', default=9, type=int)
+        parser.add_argument('--exclude', default=[], nargs='*')
+        parser.add_argument('--no-restore', action='store_true')
+        parser.add_argument('--no-backup', action='store_true')
+        args = parser.parse_args(argv[:])
+        self.port = args.port
+        self.path = args.path
+        self.dest = args.dest
+        self.mode = args.mode
+        self.owner = args.owner
+        self.compresslevel = args.compresslevel
+        self.exclude = args.exclude
+        self.no_restore = args.no_restore
+        self.no_backup = args.no_backup
 
 
 class Volume(object):
-    def __init__(self, config_path):
+    def __init__(self, config):
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.config_path = config_path
+        self.config = config
         signal.signal(signal.SIGINT, self.signal)
         signal.signal(signal.SIGTERM, self.signal)
 
-    def read_config(self, config_path):
-        parts = urlparse.urlparse(config_path)
-        if parts.scheme in ('http', 'https', 'ftp', 'file'):
-            import urllib2
-            response = urllib2.urlopen(config_path)
-            config_content = response.read()
-        elif parts.scheme == 's3':
-            client = boto3.client('s3')
-            response = client.get_object(Bucket=parts.netloc,
-                                         Key=parts.path[1:])
-            config_content = response['Body'].read()
-        else:
-            raise RuntimeError("Not supported scheme: {0}".format(config_path))
-        config = json.loads(config_content)
-        if not 'tmp' in config:
-            config['tmp'] = '/tmp'
-        return config
-
-    def backup(self):
-        config = self.read_config(self.config_path)
+    def backup(self, callback=None):
         suffix = datetime.datetime.now().strftime("-%Y%m%d-%H%M%S") + '.tar.gz'
-        for backup in config['backups']:
-            if 'path' not in backup:
-                continue
-            path = backup['path']
-            exclude_list = backup.get('exclude', [])
-            dest = backup['dest']
-            compresslevel = backup.get('compresslevel', 9)
-            parts = urlparse.urlparse(dest)
-            if parts.scheme not in ('s3', 'file'):
-                raise RuntimeError("Not supported scheme: {0}".format(dest))
-            backup_file = parts.path + suffix
-            self.logger.info("Start backup: %s", path)
-            tar_file = os.path.join(config['tmp'],
-                                    os.path.basename(backup_file))
-            tar = tarfile.TarFile.gzopen(tar_file, mode='w', compresslevel=compresslevel)
-            try:
-                for root, dirs, files in os.walk(path):
-                    for f in files + dirs:
-                        if root == path:
-                            arcname = f
-                        else:
-                            arcname = os.path.join(root[len(path)+1:], f)
-                        if not should_exclude(arcname,
-                                              exclude_list):
-                            try:
-                                tar.add(os.path.join(root, f),
-                                        arcname=arcname,
-                                        recursive=False)
-                            except IOError:
-                                pass
-                tar.close()
-                if parts.scheme == 's3':
-                    s3_params = backup.get('s3', {})
-                    client = boto3.client('s3')
-                    self.logger.info("Uploading %s to %s/%s",
-                                     tar_file, parts.netloc, backup_file[1:])
-                    client.upload_file(tar_file, parts.netloc, backup_file[1:],
-                                       ExtraArgs=s3_params)
-                elif parts.scheme == 'file':
-                    dest_path = os.path.join(parts.netloc, backup_file)
-                    self.logger.info("Copying %s to %s",
-                                     tar_file, dest_path)
-                    try:
-                        dirname = os.path.dirname(dest_path)
-                        if not os.path.exists(dirname):
-                            os.makedirs(dirname)
-                        shutil.copyfile(tar_file, dest_path)
-                    except IOError as err:
-                        self.logger.error("Failed to copy: {0}".format(str(err)))
-            finally:
-                if os.path.exists(tar_file):
-                    os.remove(tar_file)
-            self.logger.info("Done backup: %s", path)
+        path = self.config.path
+        exclude_list = self.config.exclude
+        dest = self.config.dest
+        parts = urlparse.urlparse(dest)
+        if parts.scheme not in ('s3', 'file'):
+            raise RuntimeError("Not supported scheme: {0}".format(dest))
+        backup_file = parts.path + suffix
+        self.logger.info("Start backup: %s to %s", path, backup_file)
+        if parts.scheme == 's3':
+            open_func = lambda : s3.open(parts.netloc,
+                                         backup_file[1:],
+                                         "wb",
+                                         upload_part_size=UPLOAD_PART_SIZE)
+        elif parts.scheme == 'file':
+            dest_path = os.path.join(parts.netloc, backup_file)
+            dirname = os.path.dirname(dest_path)
+            if not os.path.exists(dirname):
+                os.makedirs(dirname)
+            open_func = lambda : open(dest_path, "wb")
+        else:
+            raise RuntimeError("Not supported scheme: {0}".
+                               format(dest))
+        with open_func() as fileobj:
+            tar = tarfile.open(fileobj=fileobj,
+                               mode="w:gz",
+                               compresslevel=self.config.compresslevel)
+            for root, dirs, files in os.walk(path):
+                for f in files + dirs:
+                    if root == path:
+                        arcname = f
+                    else:
+                        arcname = os.path.join(root[len(path)+1:], f)
+                    if not should_exclude(arcname,
+                                          exclude_list):
+                        try:
+                            tar.add(os.path.join(root, f),
+                                    arcname=arcname,
+                                    recursive=False)
+                        except IOError:
+                            pass
+            tar.close()
+        self.logger.info("Done backup")
 
     def restore(self):
-        config = self.read_config(self.config_path)
-        for backup in config['backups']:
-            if 'path' not in backup:
-                continue
-            path = backup['path']
-            self.logger.info("Restoring to {0}".format(path))
-            if not os.path.exists(path):
-                os.makedirs(path)
-            if 'chmod' in backup:
-                self.logger.info("chmod {0}".format(backup['chmod']))
-                subprocess.call(['chmod', backup['chmod'], path])
-            if 'chown' in backup:
-                self.logger.info("chown {0}".format(backup['chown']))
-                subprocess.call(['chown', backup['chown'], path])
-            dest = backup['dest']
-            parts = urlparse.urlparse(dest)
-            tar_file = None
-            try:
-                if parts.scheme == 's3':
-                    client = boto3.client('s3')
-                    objects = client.list_objects(Bucket=parts.netloc,
-                                                  Prefix=parts.path[1:])
-                    if 'Contents' in objects:
-                        keys = sorted([c['Key'] for c in objects['Contents']])
-                        if keys:
-                            key = keys[-1]
-                            tar_file = os.path.join(config['tmp'],
-                                                    os.path.basename(key))
-                            client.download_file(parts.netloc, key, tar_file)
-                elif parts.scheme == 'file':
-                    src_file = os.path.join(parts.netloc, parts.path)
-                    files = sorted(glob.glob(src_file + '*'))
-                    if files:
-                        filename = files[-1]
-                        try:
-                            tar_file = os.path.join(config['tmp'], os.path.basename(filename))
-                            shutil.copyfile(filename, tar_file)
-                        except IOError as err:
-                            self.logger.error("Failed to copy: {0}".format(str(err)))
-                else:
-                    raise RuntimeError("Not supported scheme: {0}".
-                                       format(dest))
-                if tar_file is not None:
-                    self.logger.info("Restoring from {0}".format(tar_file))
-                    tar = tarfile.open(tar_file, 'r:gz')
-                    tar.extractall(backup['path'])
-                    tar.close()
-            finally:
-                if tar_file is not None:
-                    if os.path.exists(tar_file):
-                        os.remove(tar_file)
+        path = self.config.path
+        self.logger.info("Restoring to {0}".format(path))
+        if not os.path.exists(path):
+            os.makedirs(path)
+        if self.config.mode is not None:
+            self.logger.info("chmod {0}".format(self.config.mode))
+            subprocess.call(['chmod', self.config.mode, path])
+        if self.config.owner is not None:
+            self.logger.info("chown {0}".format(self.config.owner))
+            subprocess.call(['chown', self.config.owner, path])
+        dest = self.config.dest
+        parts = urlparse.urlparse(dest)
+        open_func = None
+        if parts.scheme == 's3':
+            client = boto3.client('s3')
+            objects = client.list_objects(Bucket=parts.netloc,
+                                          Prefix=parts.path[1:])
+            if 'Contents' in objects:
+                keys = sorted([c['Key'] for c in objects['Contents']])
+                if keys:
+                    key = keys[-1]
+                    open_func = lambda : s3.open(parts.netloc,
+                                                 key,
+                                                 "rb",
+                                                 buffer_size=DOWNLOAD_PART_SIZE)
+                    self.logger.info("Restoring from s3://{0}/{1}".
+                                     format(parts.netloc, key))
+        elif parts.scheme == 'file':
+            src_file = os.path.join(parts.netloc, parts.path)
+            files = sorted(glob.glob(src_file + '*'))
+            if files:
+                filename = files[-1]
+                open_func = lambda : open(filename, "rb")
+                self.logger.info("Restoring from file://{0}".format(filename))
+        else:
+            raise RuntimeError("Not supported scheme: {0}".
+                               format(dest))
+        if open_func is not None:
+            with open_func() as fileobj:
+                tar = tarfile.open(fileobj=fileobj,
+                                   mode='r:gz')
+                tar.extractall(path)
+                tar.close()
 
     def signal(self, sig, stack):
         self.logger.info("Recieved signal: %d", sig)
@@ -198,19 +182,19 @@ class ServerHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 class Server(SocketServer.TCPServer):
     allow_reuse_address = True
 
-args = get_args()
-volume = Volume(args.config)
-if not args.no_restore:
+config = Config(sys.argv[1:])
+volume = Volume(config)
+if not config.no_restore:
     volume.restore()
 
 Handler = ServerHandler
-httpd = Server(("", args.port), Handler)
+httpd = Server(("", config.port), Handler)
 httpd.volume = volume
 
-logger.info("Server started port:%d", args.port)
+logger.info("Server started port:%d", config.port)
 try:
     httpd.serve_forever()
 finally:
-    if not args.no_backup:
+    if not config.no_backup:
         volume.backup()
     logger.info("Finished")

@@ -103,7 +103,10 @@ class Volume(object):
                     if not should_exclude(arcname,
                                           exclude_list):
                         try:
-                            tar.add(os.path.join(root, f),
+                            filename = os.path.join(root, f)
+                            if callback is not None:
+                                callback(filename)
+                            tar.add(filename,
                                     arcname=arcname,
                                     recursive=False)
                         except IOError:
@@ -169,7 +172,9 @@ class ServerHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     def do_POST(self):
         self.log_message('POST recieved')
         try:
-            self.server.volume.backup()
+            def callback(f):
+                self.wfile.write(f + "\n")
+            self.server.volume.backup(callback)
             self.wfile.write("BACKUP DONE\n")
             self.send_response(200)
         except Exception as err:

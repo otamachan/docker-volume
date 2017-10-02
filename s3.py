@@ -90,15 +90,15 @@ class ReadFile(io.BufferedIOBase):
             end = min(self.content_length, start + size)
             rng = "bytes={0}-{1}".format(
                 start, end)
-            logger.info("downloading ... %d bytes(%3.1f%%-%3.1f%%)",
-                        end - size,
-                        start * 100.0 / self.content_length,
-                        end * 100.0 / self.content_length)
             self.buf = self.s3_obj.get(Range=rng)["Body"].read()
             self.buf_pos = start
             self.eof = (start + len(self.buf) == self.content_length)
-            logger.info("download done: eof=%d", self.eof)
-
+            logger.info("downloaded: %.1f/%.1f Mbytes(%3.1f%%-%3.1f%%) eof=%d",
+                        (end - start) / 1024.00 ** 2,
+                        end / 1024.00 ** 2,
+                        start * 100.0 / self.content_length,
+                        end * 100.0 / self.content_length,
+                        self.eof)
 
 
 class WriteFile(io.BufferedIOBase):
@@ -140,14 +140,16 @@ class WriteFile(io.BufferedIOBase):
     def upload(self):
         part_number = len(self.parts) + 1
         part = self.multipart_upload.Part(part_number)
-        logger.info("uploading ... %d bytes[PartNumber=%d]",
-                    self.buf.tell(),
-                    part_number)
+        size = self.buf.tell()
         self.buf.seek(0)
         upload = part.upload(Body=self.buf)
-        logger.info("upload done")
         self.parts.append({"ETag": upload["ETag"],
                            "PartNumber": part_number})
+        logger.info("uploaded: %.1f/%.1f Mbytes[PartNumber=%d, ETag=%s]",
+                    size / 1024.0 ** 2,
+                    self.total_size / 1024.0 ** 2,
+                    part_number,
+                    upload["ETag"])
         self.buf = io.BytesIO()
 
     def __enter__(self):

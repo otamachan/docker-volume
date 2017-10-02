@@ -1,27 +1,25 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import SimpleHTTPServer
+import SocketServer
 import argparse
-import boto3
 import datetime
 import glob
-import json
 import logging
 import os
 import re
-import shutil
 import signal
-import SimpleHTTPServer
-import SocketServer
 import subprocess
 import sys
 import tarfile
 import urlparse
 
+import boto3
 import s3
 
-UPLOAD_PART_SIZE = 50 * 1024**2
-DOWNLOAD_PART_SIZE = 50 * 1024**2
+UPLOAD_PART_SIZE = 100 * 1024**2
+DOWNLOAD_PART_SIZE = 100 * 1024**2
 
 
 logger = logging.getLogger(__name__)
@@ -77,16 +75,19 @@ class Volume(object):
         backup_file = parts.path + suffix
         self.logger.info("Start backup: %s to %s", path, backup_file)
         if parts.scheme == 's3':
-            open_func = lambda : s3.open(parts.netloc,
-                                         backup_file[1:],
-                                         "wb",
-                                         upload_part_size=UPLOAD_PART_SIZE)
+            def open_func():
+                return s3.open(parts.netloc,
+                               backup_file[1:],
+                               "wb",
+                               upload_part_size=UPLOAD_PART_SIZE)
         elif parts.scheme == 'file':
             dest_path = os.path.join(parts.netloc, backup_file)
             dirname = os.path.dirname(dest_path)
             if not os.path.exists(dirname):
                 os.makedirs(dirname)
-            open_func = lambda : open(dest_path, "wb")
+
+            def open_func():
+                return open(dest_path, "wb")
         else:
             raise RuntimeError("Not supported scheme: {0}".
                                format(dest))
@@ -136,10 +137,12 @@ class Volume(object):
                 keys = sorted([c['Key'] for c in objects['Contents']])
                 if keys:
                     key = keys[-1]
-                    open_func = lambda : s3.open(parts.netloc,
-                                                 key,
-                                                 "rb",
-                                                 buffer_size=DOWNLOAD_PART_SIZE)
+
+                    def open_func():
+                        return s3.open(parts.netloc,
+                                       key,
+                                       "rb",
+                                       buffer_size=DOWNLOAD_PART_SIZE)
                     self.logger.info("Restoring from s3://{0}/{1}".
                                      format(parts.netloc, key))
         elif parts.scheme == 'file':
@@ -147,7 +150,9 @@ class Volume(object):
             files = sorted(glob.glob(src_file + '*'))
             if files:
                 filename = files[-1]
-                open_func = lambda : open(filename, "rb")
+
+                def open_func():
+                    return open(filename, "rb")
                 self.logger.info("Restoring from file://{0}".format(filename))
         else:
             raise RuntimeError("Not supported scheme: {0}".
